@@ -1,0 +1,9 @@
+bin/
+obj/
+Transcripts/
+Models/
+Models/*.bin
+*.log
+*.tmp
+*.cache
+DownloadedAudio/
