@@ -26,6 +26,7 @@ namespace Vett
         private bool _isMediaLoaded = false;
         private IProgress<double> _downloadProgressReporter;
         private IProgress<int> _transcribeProgressReporter;
+        private double _currentDuration = 0;
 
         public MainWindow()
         {
@@ -47,7 +48,8 @@ namespace Vett
 
             // Set initial slider values safely
             startSlider.Value = 0;
-            durationSlider.Value = 300;
+            endSlider.Value = 300;
+
             Directory.CreateDirectory(AudioOutputDir);
             Directory.CreateDirectory(TranscriptsDir);
 
@@ -149,7 +151,7 @@ namespace Vett
                 if (_mediaPlayer.NaturalDuration.HasTimeSpan)
                 {
                     seekSlider.Maximum = _mediaPlayer.NaturalDuration.TimeSpan.TotalSeconds;
-                    durationSlider.Maximum = Math.Max(durationSlider.Maximum, seekSlider.Maximum);
+                    endSlider.Maximum = Math.Max(endSlider.Maximum, seekSlider.Maximum);
                 }
                 txtNowPlaying.Text = $"▶ Playing: {Path.GetFileName(_currentFile)}";
             });
@@ -182,13 +184,19 @@ namespace Vett
         private void startSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (txtStartTime != null)
-                txtStartTime.Text = e.NewValue.ToString("F1");
+            {
+                TimeSpan ts = TimeSpan.FromSeconds(e.NewValue);
+                txtStartTime.Text = ts.ToString(@"mm\:ss");
+            }
         }
 
-        private void durationSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        private void endSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (txtDuration != null)
-                txtDuration.Text = e.NewValue.ToString("F0");
+            if (txtEndTime != null)
+            {
+                TimeSpan ts = TimeSpan.FromSeconds(e.NewValue);
+                txtEndTime.Text = ts.ToString(@"mm\:ss");
+            }
         }
 
         // ====================== DOWNLOAD ======================
@@ -232,24 +240,34 @@ namespace Vett
         {
             if (string.IsNullOrEmpty(_currentFile))
             {
-                MessageBox.Show("Please select a file first.");
+                MessageBox.Show("Please select an audio file first.");
+                return;
+            }
+
+            double startSec = startSlider.Value;
+            double endSec = endSlider.Value;
+
+            if (endSec <= startSec)
+            {
+                MessageBox.Show("End time must be after Start time.");
                 return;
             }
 
             string output = Path.Combine("DownloadedAudio",
                 Path.GetFileNameWithoutExtension(_currentFile) + "_trimmed.mp3");
 
-            TrimAudio(_currentFile, output, startSlider.Value, durationSlider.Value);
-            MessageBox.Show($"✅ Trimmed file saved:\n{Path.GetFileName(output)}");
+            TrimAudio(_currentFile, output, startSec, endSec - startSec);
+
+            MessageBox.Show($"✅ Trimmed file saved!\n{Path.GetFileName(output)}", "Success");
             LoadAudioFiles();
         }
 
-        private void TrimAudio(string input, string output, double start, double duration)
+        private void TrimAudio(string input, string output, double startSeconds, double durationSeconds)
         {
             var psi = new ProcessStartInfo
             {
                 FileName = "ffmpeg",
-                Arguments = $"-y -ss {start} -t {duration} -i \"{input}\" -c copy \"{output}\"",
+                Arguments = $"-y -ss {startSeconds} -t {durationSeconds} -i \"{input}\" -c copy \"{output}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -275,7 +293,7 @@ namespace Vett
             if (string.IsNullOrEmpty(_currentFile)) return;
 
             string trimmed = Path.Combine("DownloadedAudio", "temp_trimmed_for_transcription.mp3");
-            TrimAudio(_currentFile, trimmed, startSlider.Value, durationSlider.Value);
+            TrimAudio(_currentFile, trimmed, startSlider.Value, endSlider.Value - startSlider.Value);
 
             await TranscribeFileAsync(trimmed, "Trimmed");
         }
@@ -293,16 +311,14 @@ namespace Vett
 
             try
             {
-                // 1. Convert to proper WAV
                 transcribeProgress.Value = 15;
                 ConvertToWhisperWav(inputFilePath, wavPath);
 
-                // 2. Load model
                 transcribeProgress.Value = 25;
                 string modelPath = "Models/ggml-base.bin";
                 if (!File.Exists(modelPath))
                 {
-                    MessageBox.Show("Whisper model not found.\nPlease download it first.");
+                    MessageBox.Show("Whisper model not found.");
                     return;
                 }
 
@@ -313,27 +329,45 @@ namespace Vett
 
                 transcribeProgress.Value = 35;
 
-                var segments = new List<Object>();
-
-                // ✅ Open the file as Stream (this is what ProcessAsync expects)
-                using var wavStream = File.OpenRead(wavPath);
-
-                await foreach (var segment in processor.ProcessAsync(wavStream))
+                var segments = new List<dynamic>();
+                await foreach (var segment in processor.ProcessAsync(File.OpenRead(wavPath)))
                 {
                     segments.Add(segment);
+                }
 
-                    // Rough progress
-                    if (segments.Count % 8 == 0)
+                // === Build nicely formatted Markdown with paragraphs ===
+                string mdContent = $"# Transcription ({type})\n\n";
+                mdContent += $"**File:** {Path.GetFileName(inputFilePath)}\n";
+                mdContent += $"**Date:** {DateTime.UtcNow:yyyy-MM-dd HH:mm UTC}\n\n";
+
+                // Join all text and create paragraphs
+                string fullText = string.Join(" ", segments.Select(s => s.Text.Trim()));
+
+                // Split into sentences and group into paragraphs (roughly 3-5 sentences per paragraph)
+                var sentences = SplitIntoSentences(fullText);
+                string formattedText = "";
+
+                for (int i = 0; i < sentences.Count; i++)
+                {
+                    formattedText += sentences[i] + " ";
+
+                    // Create new paragraph every 3-4 sentences
+                    if ((i + 1) % 4 == 0 && i < sentences.Count - 1)
                     {
-                        double progress = Math.Min(95, 35 + (segments.Count * 1.2));
-                        Dispatcher.Invoke(() => transcribeProgress.Value = progress);
+                        formattedText += "\n\n";
                     }
                 }
 
-                // Build Markdown
-                string mdContent = $"# Local Whisper Transcription ({type})\n\n" +
-                                  $"**File:** {Path.GetFileName(inputFilePath)}\n" +
-                                  $"**Date:** {DateTime.UtcNow:yyyy-MM-dd HH:mm UTC}\n\n";
+                mdContent += formattedText.Trim() + "\n\n";
+
+                // Optional: Keep timestamped version below
+                //mdContent += "## Timestamped Segments\n\n";
+                //foreach (var segment in segments)
+                //{
+                //    string start = TimeSpan.FromSeconds(segment.Start).ToString(@"mm\:ss");
+                //    string end = TimeSpan.FromSeconds(segment.End).ToString(@"mm\:ss");
+                //    mdContent += $"**[{start} → {end}]** {segment.Text.Trim()}\n\n";
+                //}
 
                 string mdPath = Path.Combine("Transcripts",
                     Path.GetFileNameWithoutExtension(inputFilePath) + $"_{type.ToLower()}_local.md");
@@ -350,12 +384,41 @@ namespace Vett
             }
             finally
             {
-                if (File.Exists(wavPath))
-                    try { File.Delete(wavPath); } catch { }
-
+                if (File.Exists(wavPath)) try { File.Delete(wavPath); } catch { }
                 await Task.Delay(800);
                 transcribeProgress.Value = 0;
             }
+        }
+
+        // Helper: Split text into sentences
+        private List<string> SplitIntoSentences(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return new List<string>();
+
+            // Simple sentence splitting
+            var delimiters = new char[] { '.', '!', '?' };
+            var sentences = new List<string>();
+            int start = 0;
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (delimiters.Contains(text[i]) && i < text.Length - 1)
+                {
+                    string sentence = text.Substring(start, i - start + 1).Trim();
+                    if (!string.IsNullOrWhiteSpace(sentence))
+                        sentences.Add(sentence);
+
+                    start = i + 1;
+                }
+            }
+
+            // Add the last sentence
+            string last = text.Substring(start).Trim();
+            if (!string.IsNullOrWhiteSpace(last))
+                sentences.Add(last);
+
+            return sentences;
         }
 
         // Helper: Convert any audio to Whisper-compatible WAV
