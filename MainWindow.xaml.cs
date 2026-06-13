@@ -1,7 +1,5 @@
-﻿using System;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Windows;
@@ -10,9 +8,11 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using YoutubeExplode;
 using YoutubeExplode.Converter;
-using OpenAI.Audio;
 using Whisper.net;
-using System.Collections.Generic;  // For List<WhisperResult>
+using System.Text.RegularExpressions;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace Vett
 {
@@ -27,6 +27,99 @@ namespace Vett
         private IProgress<double> _downloadProgressReporter;
         private IProgress<int> _transcribeProgressReporter;
         private double _currentDuration = 0;
+
+        // Dictionary: Full name / common variations → Blue Letter Bible short code
+        private static readonly Dictionary<string, string> BibleBooks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+{
+    // Old Testament
+    {"Genesis", "gen"}, {"Gen", "gen"}, {"Ge", "gen"},
+    {"Exodus", "exo"}, {"Exod", "exo"}, {"Ex", "exo"},
+    {"Leviticus", "lev"}, {"Lev", "lev"},
+    {"Numbers", "num"}, {"Num", "num"},
+    {"Deuteronomy", "deu"}, {"Deut", "deu"}, {"Dt", "deu"},
+    {"Joshua", "jos"}, {"Josh", "jos"},
+    {"Judges", "jdg"}, {"Jdg", "jdg"},
+    {"Ruth", "rth"},
+    {"1 Samuel", "1sa"}, {"1 Sam", "1sa"}, {"1Sa", "1sa"},
+    {"2 Samuel", "2sa"}, {"2 Sam", "2sa"}, {"2Sa", "2sa"},
+    {"1 Kings", "1ki"}, {"1 Ki", "1ki"},
+    {"2 Kings", "2ki"}, {"2 Ki", "2ki"},
+    {"1 Chronicles", "1ch"}, {"1 Chr", "1ch"},
+    {"2 Chronicles", "2ch"}, {"2 Chr", "2ch"},
+    {"Ezra", "ezr"},
+    {"Nehemiah", "neh"},
+    {"Esther", "est"},
+    {"Job", "job"},
+    {"Psalms", "psa"}, {"Psalm", "psa"}, {"Psa", "psa"},
+    {"Proverbs", "pro"}, {"Prov", "pro"},
+    {"Ecclesiastes", "ecc"}, {"Eccl", "ecc"},
+    {"Song of Solomon", "sng"}, {"Song of Songs", "sng"}, {"Canticles", "sng"},
+    {"Isaiah", "isa"}, {"Isa", "isa"},
+    {"Jeremiah", "jer"}, {"Jer", "jer"},
+    {"Lamentations", "lam"},
+    {"Ezekiel", "eze"}, {"Ezek", "eze"},
+    {"Daniel", "dan"}, {"Dan", "dan"},
+    {"Hosea", "hos"},
+    {"Joel", "joe"},
+    {"Amos", "amo"},
+    {"Obadiah", "oba"},
+    {"Jonah", "jon"},
+    {"Micah", "mic"},
+    {"Nahum", "nah"},
+    {"Habakkuk", "hab"},
+    {"Zephaniah", "zep"},
+    {"Haggai", "hag"},
+    {"Zechariah", "zec"},
+    {"Malachi", "mal"},
+
+    // New Testament
+    {"Matthew", "mat"}, {"Matt", "mat"},
+    {"Mark", "mrk"},
+    {"Luke", "luk"},
+    {"John", "jhn"},
+    {"Acts", "act"},
+    {"Romans", "rom"}, {"Rom", "rom"},
+    {"1 Corinthians", "1co"}, {"1 Cor", "1co"},
+    {"2 Corinthians", "2co"}, {"2 Cor", "2co"},
+    {"Galatians", "gal"},
+    {"Ephesians", "eph"},
+    {"Philippians", "php"},
+    {"Colossians", "col"},
+    {"1 Thessalonians", "1th"}, {"1 Thess", "1th"},
+    {"2 Thessalonians", "2th"}, {"2 Thess", "2th"},
+    {"1 Timothy", "1ti"}, {"1 Tim", "1ti"},
+    {"2 Timothy", "2ti"}, {"2 Tim", "2ti"},
+    {"Titus", "tit"},
+    {"Philemon", "phm"},
+    {"Hebrews", "heb"},
+    {"James", "jas"},
+    {"1 Peter", "1pe"}, {"1 Pet", "1pe"},
+    {"2 Peter", "2pe"}, {"2 Pet", "2pe"},
+    {"1 John", "1jn"}, {"2 John", "2jn"}, {"3 John", "3jn"},
+    {"Jude", "jud"},
+    {"Revelation", "rev"}
+};
+
+        /// <summary>
+        /// Replaces Bible book mentions with Blue Letter Bible links
+        /// </summary>
+        private string AddBibleLinks(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            foreach (var book in BibleBooks.OrderByDescending(b => b.Key.Length)) // Longer names first
+            {
+                // Better regex: matches whole word, avoids matching inside other words
+                string pattern = $@"\b({Regex.Escape(book.Key)})\b";
+
+                string replacement = $"[{book.Key}](https://www.blueletterbible.org/nkjv/{book.Value}/)";
+
+                text = Regex.Replace(text, pattern, replacement, RegexOptions.IgnoreCase);
+            }
+
+            return text;
+        }
 
         public MainWindow()
         {
@@ -298,6 +391,8 @@ namespace Vett
             await TranscribeFileAsync(trimmed, "Trimmed");
         }
 
+
+
         private async Task TranscribeFileAsync(string inputFilePath, string type)
         {
             if (!File.Exists(inputFilePath))
@@ -323,60 +418,107 @@ namespace Vett
                 }
 
                 using var whisperFactory = WhisperFactory.FromPath(modelPath);
-                using var processor = whisperFactory.CreateBuilder()
-                    .WithLanguage("auto")
-                    .Build();
+                using var processor = whisperFactory.CreateBuilder().WithLanguage("auto").Build();
 
                 transcribeProgress.Value = 35;
 
                 var segments = new List<dynamic>();
-                await foreach (var segment in processor.ProcessAsync(File.OpenRead(wavPath)))
+                using var wavStream = File.OpenRead(wavPath);
+                await foreach (var segment in processor.ProcessAsync(wavStream))
                 {
                     segments.Add(segment);
                 }
 
-                // === Build nicely formatted Markdown with paragraphs ===
-                string mdContent = $"# Transcription ({type})\n\n";
-                mdContent += $"**File:** {Path.GetFileName(inputFilePath)}\n";
-                mdContent += $"**Date:** {DateTime.UtcNow:yyyy-MM-dd HH:mm UTC}\n\n";
-
-                // Join all text and create paragraphs
                 string fullText = string.Join(" ", segments.Select(s => s.Text.Trim()));
+                // string linkedText = AddBibleLinks(fullText);
 
-                // Split into sentences and group into paragraphs (roughly 3-5 sentences per paragraph)
-                var sentences = SplitIntoSentences(fullText);
-                string formattedText = "";
-
-                for (int i = 0; i < sentences.Count; i++)
-                {
-                    formattedText += sentences[i] + " ";
-
-                    // Create new paragraph every 3-4 sentences
-                    if ((i + 1) % 4 == 0 && i < sentences.Count - 1)
-                    {
-                        formattedText += "\n\n";
-                    }
-                }
-
-                mdContent += formattedText.Trim() + "\n\n";
-
-                // Optional: Keep timestamped version below
-                //mdContent += "## Timestamped Segments\n\n";
-                //foreach (var segment in segments)
-                //{
-                //    string start = TimeSpan.FromSeconds(segment.Start).ToString(@"mm\:ss");
-                //    string end = TimeSpan.FromSeconds(segment.End).ToString(@"mm\:ss");
-                //    mdContent += $"**[{start} → {end}]** {segment.Text.Trim()}\n\n";
-                //}
-
-                string mdPath = Path.Combine("Transcripts",
-                    Path.GetFileNameWithoutExtension(inputFilePath) + $"_{type.ToLower()}_local.md");
+                // === Generate Professional PDF with Clickable Bible Links ===
+                string pdfPath = Path.Combine("Transcripts",
+                    Path.GetFileNameWithoutExtension(inputFilePath) + $".pdf");
 
                 Directory.CreateDirectory("Transcripts");
-                await File.WriteAllTextAsync(mdPath, mdContent);
+                QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community; // Ensure license is set for QuestPDF
+
+                Directory.CreateDirectory("Transcripts");
+
+                Document.Create(container =>
+                {
+                    container.Page(page =>
+                    {
+                        page.Size(PageSizes.A4);
+                        page.Margin(40);
+                        page.DefaultTextStyle(x => x.FontSize(11).FontFamily("Arial"));
+
+                        // ====================== HEADER (Only on First Page) ======================
+                        page.Header().Column(headerCol =>
+                        {
+                            headerCol.Item().ShowOnce().Column(col =>   // ← Only appears on page 1
+                            {
+                                col.Item().Text(Path.GetFileName(inputFilePath))
+                                    .FontSize(13).SemiBold().FontColor(QuestPDF.Helpers.Colors.Grey.Darken3);
+
+                                col.Item().Text($"Generated on: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC")
+                                    .FontSize(10).Italic().FontColor(QuestPDF.Helpers.Colors.Grey.Medium);
+
+                                col.Item().PaddingTop(8).LineHorizontal(1).LineColor(QuestPDF.Helpers.Colors.Grey.Lighten2);
+                            });
+                        });
+
+                        // ====================== MAIN CONTENT ======================
+                        page.Content().Column(col =>
+                        {
+                            col.Item().PaddingTop(10);
+
+                            // Main transcription text with clickable Bible links
+                            var sentences = SplitIntoSentences(fullText);
+
+                            foreach (var sentence in sentences)
+                            {
+                                if (string.IsNullOrWhiteSpace(sentence)) continue;
+
+                                col.Item().Text(text =>
+                                {
+                                    string remaining = sentence;
+                                    int lastIndex = 0;
+
+                                    foreach (var book in BibleBooks.OrderByDescending(b => b.Key.Length))
+                                    {
+                                        var matches = Regex.Matches(remaining, $@"\b({Regex.Escape(book.Key)})\b", RegexOptions.IgnoreCase);
+
+                                        foreach (Match match in matches.Cast<Match>().OrderBy(m => m.Index))
+                                        {
+                                            if (match.Index > lastIndex)
+                                                text.Span(remaining.Substring(lastIndex, match.Index - lastIndex));
+
+                                            string url = $"https://www.blueletterbible.org/nkjv/{book.Value}/";
+                                            text.Hyperlink(book.Key, url)
+                                                .FontColor(QuestPDF.Helpers.Colors.Blue.Darken1)
+                                                .Underline();
+
+                                            lastIndex = match.Index + match.Length;
+                                        }
+                                    }
+
+                                    if (lastIndex < remaining.Length)
+                                        text.Span(remaining.Substring(lastIndex));
+                                });
+                            }
+                        });
+
+                        // Footer on all pages
+                        page.Footer().AlignCenter().Text(x =>
+                        {
+                            x.Span("Page ");
+                            x.CurrentPageNumber();
+                            x.Span(" of ");
+                            x.TotalPages();
+                        });
+                    });
+                }).GeneratePdf(pdfPath);
 
                 transcribeProgress.Value = 100;
-                MessageBox.Show($"✅ Transcription completed!\nSaved as:\n{Path.GetFileName(mdPath)}");
+                MessageBox.Show($"✅ PDF Transcription completed!\n\nSaved as:\n{Path.GetFileName(pdfPath)}",
+                    "Success", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
