@@ -26,7 +26,6 @@ namespace Vett
         private bool _isMediaLoaded = false;
         private IProgress<double> _downloadProgressReporter;
         private IProgress<int> _transcribeProgressReporter;
-        private double _currentDuration = 0;
 
         // Dictionary: Full name / common variations → Blue Letter Bible short code
         private static readonly Dictionary<string, string> BibleBooks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -100,27 +99,6 @@ namespace Vett
     {"Revelation", "rev"}
 };
 
-        /// <summary>
-        /// Replaces Bible book mentions with Blue Letter Bible links
-        /// </summary>
-        private string AddBibleLinks(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return text;
-
-            foreach (var book in BibleBooks.OrderByDescending(b => b.Key.Length)) // Longer names first
-            {
-                // Better regex: matches whole word, avoids matching inside other words
-                string pattern = $@"\b({Regex.Escape(book.Key)})\b";
-
-                string replacement = $"[{book.Key}](https://www.blueletterbible.org/nkjv/{book.Value}/)";
-
-                text = Regex.Replace(text, pattern, replacement, RegexOptions.IgnoreCase);
-            }
-
-            return text;
-        }
-
         public MainWindow()
         {
             InitializeComponent();
@@ -167,7 +145,9 @@ namespace Vett
         {
             if (lstFiles.SelectedItem is string filename)
             {
-                _currentFile = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "DownloadedAudio", filename);
+                var assemblyLocation = Assembly.GetExecutingAssembly().Location;
+                var baseDir = Path.GetDirectoryName(assemblyLocation) ?? AppDomain.CurrentDomain.BaseDirectory;
+                _currentFile = Path.Combine(baseDir, "DownloadedAudio", filename);
                 txtNowPlaying.Text = $"Now Playing: {filename}";
                 _isMediaLoaded = false;
 
@@ -437,7 +417,7 @@ namespace Vett
                     Path.GetFileNameWithoutExtension(inputFilePath) + $".pdf");
 
                 Directory.CreateDirectory("Transcripts");
-                QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community; // Ensure license is set for QuestPDF
+                QuestPDF.Settings.License = LicenseType.Community; // Ensure license is set for QuestPDF
 
                 Directory.CreateDirectory("Transcripts");
 
