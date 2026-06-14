@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="YouTube Audio Tool - Player, Trimmer"
-        Height="720"
+        Height="780"
         Width="1100"
         Background="#F0F0F0">
 
@@ -145,9 +145,6 @@
 
                                         <UniformGrid Columns="2"
                                                      Margin="0,16,0,0">
-                                                <Button Content="Preview Trim"
-                                                        Click="PreviewTrim_Click"
-                                                        Margin="0,0,6,0"/>
                                                 <Button Content="Save Trimmed File"
                                                         Click="SaveTrim_Click"
                                                         Background="#27AE60"
@@ -197,6 +194,23 @@
                                 Click="DownloadModelButton_Click"
                                 Margin="0,10,0,0"
                                 Height="36"/>
+                        <!-- Bible Books Detected -->
+                        <TextBlock Text="Bible Books Detected"
+                                   FontWeight="Bold"
+                                   Margin="0,20,0,5"/>
+                        <Border BorderBrush="#CCC"
+                                BorderThickness="1"
+                                Background="White"
+                                Padding="8">
+                                <ScrollViewer Height="120"
+                                              VerticalScrollBarVisibility="Auto">
+                                        <TextBlock x:Name="txtDetectedBooks"
+                                                   Text="No books detected yet."
+                                                   TextWrapping="Wrap"
+                                                   FontSize="13"
+                                                   FontFamily="Consolas"/>
+                                </ScrollViewer>
+                        </Border>
                 </StackPanel>
         </Grid>
 </Window>

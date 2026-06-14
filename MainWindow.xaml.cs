@@ -32,7 +32,7 @@ namespace Vett
 {
     // Old Testament
     {"Genesis", "gen"}, {"Gen", "gen"}, {"Ge", "gen"},
-    {"Exodus", "exo"}, {"Exod", "exo"}, {"Ex", "exo"},
+    {"Exodus", "exo"}, {"Exod", "exo"}, {"Exo", "exo"},
     {"Leviticus", "lev"}, {"Lev", "lev"},
     {"Numbers", "num"}, {"Num", "num"},
     {"Deuteronomy", "deu"}, {"Deut", "deu"}, {"Dt", "deu"},
@@ -349,11 +349,6 @@ namespace Vett
             process?.WaitForExit();
         }
 
-        private void PreviewTrim_Click(object sender, RoutedEventArgs e)
-        {
-            MessageBox.Show("Preview functionality can be added with NAudio waveform.\nFor now, use the player + trim sliders.");
-        }
-
         // ====================== TRANSCRIBE ======================
         private async void TranscribeOriginal_Click(object sender, RoutedEventArgs e)
         {
@@ -380,12 +375,13 @@ namespace Vett
                 MessageBox.Show("File not found.");
                 return;
             }
-
+            txtDetectedBooks.Text = "Beginning transform to .wav file for transcription...";
             transcribeProgress.Value = 0;
             string wavPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "_whisper.wav");
 
             try
             {
+                txtDetectedBooks.Text = "Beginning transcription... This may take a few minutes.";
                 transcribeProgress.Value = 15;
                 ConvertToWhisperWav(inputFilePath, wavPath);
 
@@ -411,7 +407,28 @@ namespace Vett
 
                 string fullText = string.Join(" ", segments.Select(s => s.Text.Trim()));
                 // string linkedText = AddBibleLinks(fullText);
+                var detectedBooks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // Extract unique books found
+                foreach (var book in BibleBooks.Keys)
+                {
+                    if (Regex.IsMatch(fullText, $@"\b{Regex.Escape(book)}\b", RegexOptions.IgnoreCase))
+                        detectedBooks.Add(book);
+                }
 
+                // Update UI with detected books
+                Dispatcher.Invoke(() =>
+                {
+                    if (detectedBooks.Count > 0)
+                    {
+                        txtDetectedBooks.Text = string.Join("\n", detectedBooks.OrderBy(b => b));
+                        txtDetectedBooks.Foreground = Brushes.DarkGreen;
+                    }
+                    else
+                    {
+                        txtDetectedBooks.Text = "(No Bible books detected in this transcription)";
+                        txtDetectedBooks.Foreground = Brushes.Gray;
+                    }
+                });
                 // === Generate Professional PDF with Clickable Bible Links ===
                 string pdfPath = Path.Combine("Transcripts",
                     Path.GetFileNameWithoutExtension(inputFilePath) + $".pdf");
@@ -623,8 +640,14 @@ namespace Vett
         private void RefreshList_Click(object sender, RoutedEventArgs e) => LoadAudioFiles();
         private void OpenFolder_Click(object sender, RoutedEventArgs e)
         {
-            if (Directory.Exists("DownloadedAudio"))
-                Process.Start("explorer.exe", "DownloadedAudio");
+            if (Directory.Exists("Transcripts"))
+            {
+                Process.Start("explorer.exe", "Transcripts");
+            }
+            else
+            {
+                MessageBox.Show("Transcripts folder not found.");
+            }
         }
 
         // Placeholder helpers
