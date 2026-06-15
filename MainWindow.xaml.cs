@@ -319,8 +319,14 @@ namespace Vett
 
             try
             {
-                string outputPath = Path.Combine("DownloadedAudio",
-                    $"download_{DateTime.Now:yyyyMMdd_HHmmss}.mp3");
+                var youtube = new YoutubeClient();
+                string? customName = txtYouTubeUrl.Text;
+                var video = await youtube.Videos.GetAsync(txtYouTubeUrl.Text);
+
+                string safeTitle = Path.GetInvalidFileNameChars()
+                          .Aggregate(video.Title, (current, c) => current.Replace(c, '_'));
+
+                string outputPath = Path.Combine("DownloadedAudio", $"{safeTitle}.mp3");
 
                 Directory.CreateDirectory("DownloadedAudio");
 
