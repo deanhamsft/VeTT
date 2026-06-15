@@ -19,5 +19,12 @@
     <PackageReference Include="YoutubeExplode" Version="6.6.0" />
     <PackageReference Include="YoutubeExplode.Converter" Version="6.6.0" />
   </ItemGroup>
+<ItemGroup>
+  <!-- Bundle yt-dlp.exe -->
+  <Content Include="Assets\yt-dlp.exe">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+  </Content>
+</ItemGroup>
 
 </Project>

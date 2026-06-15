@@ -26,7 +26,7 @@ namespace Vett
         private bool _isMediaLoaded = false;
         private IProgress<double> _downloadProgressReporter;
         private IProgress<int> _transcribeProgressReporter;
-
+        private bool _ytDlpAvailable = false;
         // Dictionary: Full name / common variations → Blue Letter Bible short code
         private static readonly Dictionary<string, string> BibleBooks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -125,6 +125,35 @@ namespace Vett
             Directory.CreateDirectory(TranscriptsDir);
 
             LoadAudioFiles();
+            CheckYtDlpAvailability();
+        }
+
+        private void CheckYtDlpAvailability()
+        {
+            string ytDlpPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets\\yt-dlp.exe");
+
+            if (File.Exists(ytDlpPath))
+            {
+                _ytDlpAvailable = true;
+                // Optional: Show small status
+                // txtNowPlaying.Text = "✓ yt-dlp ready";
+            }
+            else
+            {
+                _ytDlpAvailable = false;
+                Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show(
+                        "yt-dlp.exe was not found in the application folder.\n\n" +
+                        "Please make sure:\n" +
+                        "1. yt-dlp.exe is in the 'Assets' folder\n" +
+                        "2. It is set to 'Copy to Output Directory'\n\n" +
+                        "The app will still run, but YouTube downloads will not work until this is fixed.",
+                        "yt-dlp Not Found",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                });
+            }
         }
 
         private void LoadAudioFiles()
@@ -275,36 +304,76 @@ namespace Vett
         // ====================== DOWNLOAD ======================
         private async void DownloadButton_Click(object sender, RoutedEventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtYouTubeUrl.Text) ||
-                txtYouTubeUrl.Text.Contains("...")) return;
+            if (string.IsNullOrWhiteSpace(txtYouTubeUrl.Text) || txtYouTubeUrl.Text.Contains("..."))
+            {
+                MessageBox.Show("Please enter a valid YouTube URL.", "Invalid URL");
+                return;
+            }
 
             downloadProgress.Value = 0;
+            string url = txtYouTubeUrl.Text.Trim();
+            txtDetectedBooks.Text = $"Downloading Audio from {url}";
 
             try
             {
-                var youtube = new YoutubeClient();
-                string? customName = txtYouTubeUrl.Text;
-                var video = await youtube.Videos.GetAsync(txtYouTubeUrl.Text);
+                string outputPath = Path.Combine("DownloadedAudio",
+                    $"download_{DateTime.Now:yyyyMMdd_HHmmss}.mp3");
 
-                string safeTitle = Path.GetInvalidFileNameChars()
-                          .Aggregate(video.Title, (current, c) => current.Replace(c, '_'));
+                Directory.CreateDirectory("DownloadedAudio");
 
-                string outputPath = Path.Combine("DownloadedAudio", $"{safeTitle}.mp3");
+                // Use bundled yt-dlp.exe from output directory
+                string ytDlpPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets\\yt-dlp.exe");
 
-                await youtube.Videos.DownloadAsync(
-                    txtYouTubeUrl.Text,
-                    outputPath,
-                    o => o.SetFFmpegPath("ffmpeg").SetContainer("mp3"),
-                    progress: _downloadProgressReporter
-                );
+                if (!File.Exists(ytDlpPath))
+                {
+                    MessageBox.Show("yt-dlp.exe not found in build folder.\nPlease make sure it's in the Assets folder and set to Copy to Output.",
+                        "Missing File", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
 
-                downloadProgress.Value = 100;
-                MessageBox.Show("✅ Download completed!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
-                LoadAudioFiles();
+                txtNowPlaying.Text = "Downloading audio...";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = ytDlpPath,
+                    Arguments = $"-f bestaudio --extract-audio --audio-format mp3 " +
+                                $"--audio-quality 0 -o \"{outputPath}\" \"{url}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = Process.Start(psi);
+
+                // Simple progress reading
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
+
+                await process.WaitForExitAsync();
+
+                if (process.ExitCode == 0)
+                {
+                    downloadProgress.Value = 100;
+                    MessageBox.Show($"✅ Download completed!\n\n{Path.GetFileName(outputPath)}",
+                        "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                    LoadAudioFiles();
+                }
+                else
+                {
+                    MessageBox.Show($"Download failed:\n{error}", "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Download failed:\n" + ex.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Error: {ex.Message}");
+            }
+            finally
+            {
+                await Task.Delay(1000);
+                downloadProgress.Value = 0;
             }
         }
 
