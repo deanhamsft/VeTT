@@ -26,7 +26,6 @@ namespace Vett
         private bool _isMediaLoaded = false;
         private IProgress<double> _downloadProgressReporter;
         private IProgress<int> _transcribeProgressReporter;
-        private bool _ytDlpAvailable = false;
         // Dictionary: Full name / common variations → Blue Letter Bible short code
         private static readonly Dictionary<string, string> BibleBooks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -126,21 +125,15 @@ namespace Vett
 
             LoadAudioFiles();
             CheckYtDlpAvailability();
+            CheckModelpath();
         }
 
         private void CheckYtDlpAvailability()
         {
             string ytDlpPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets\\yt-dlp.exe");
 
-            if (File.Exists(ytDlpPath))
+            if (!File.Exists(ytDlpPath))
             {
-                _ytDlpAvailable = true;
-                // Optional: Show small status
-                // txtNowPlaying.Text = "✓ yt-dlp ready";
-            }
-            else
-            {
-                _ytDlpAvailable = false;
                 Dispatcher.Invoke(() =>
                 {
                     MessageBox.Show(
@@ -153,6 +146,16 @@ namespace Vett
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                 });
+            }
+        }
+
+        private void CheckModelpath()
+        {
+            string modelPath = "Models/ggml-base.bin";
+            if (!File.Exists(modelPath))
+            {
+                txtDetectedBooks.Text = "Whisper model not found. downloading...";
+                DownloadModelButton_Click(this, new RoutedEventArgs());
             }
         }
 
@@ -345,6 +348,12 @@ namespace Vett
                 };
 
                 using var process = Process.Start(psi);
+
+                if (process == null)
+                {
+                    MessageBox.Show("Failed to start yt-dlp process.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
 
                 // Simple progress reading
                 string output = await process.StandardOutput.ReadToEndAsync();
@@ -681,8 +690,6 @@ namespace Vett
 
                 await fileStream.FlushAsync();
                 transcribeProgress.Value = 100;
-
-                MessageBox.Show("✅ Whisper model downloaded successfully!", "Success");
             }
             catch (Exception ex)
             {
@@ -704,6 +711,7 @@ namespace Vett
             }
 
             await DownloadWhisperModelAsync(modelPath);
+            txtDetectedBooks.Text = "Whisper model is ready. You can now transcribe audio files.";
         }
 
         private void RefreshList_Click(object sender, RoutedEventArgs e) => LoadAudioFiles();
